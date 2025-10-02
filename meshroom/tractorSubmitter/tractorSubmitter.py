@@ -8,8 +8,8 @@ import logging
 from meshroom.core.submitter import BaseSubmitter, BaseSubmittedJob
 from meshroom.core.submitter import SubmitterOptions, SubmitterOptionsEnum
 
-from tractor.api.base import TRACTOR_JOB_URL
-from tractor.api.tractorJobCreation import get_job_packages, Task, Job
+from tractorSubmitter.api.base import TRACTOR_JOB_URL
+from tractorSubmitter.api.tractorJobCreation import get_job_packages, Task, Job
 
 currentDir = os.path.dirname(os.path.realpath(__file__))
 binDir = os.path.dirname(os.path.dirname(os.path.dirname(currentDir)))
