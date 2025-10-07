@@ -1,24 +1,30 @@
 #!/usr/bin/env python
 
 """
-In this script we will execute a small process
-then create some subtasks
+We can execute anything here.
+
+The stdout is redirected to stderr with the wrapper so if we want to spool subtasks 
+we can use  queueSubtask :
+>>> from subtaskCreator import queueSubtask
+>>> queueSubtask(title, cmd, service, tags, metadata, envkey)
 """
 
-import sys
-import json
 import os
 import re
-import shlex
 import getpass
+import logging
+from tractorSubmitter.api.subtaskCreator import queueSubtask
 
 REZ_DELIMITER_PATTERN = re.compile(r"-|==|>=|>|<=|<")
 
-stdout_lines = []
 
-def log(*text):
-    text = " ".join(text)
-    sys.stderr.write(text + "\n")
+# Configure logging - will go to stderr (Tractor log)
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] %(levelname)s: %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 
 def rezWrapCommand(cmd):
     rezPackages = set()
@@ -69,49 +75,41 @@ def get_envkey():
     return [f"setenv {k}={v}" for k, v in environment.items()]
 
 
-def createTask(index) -> list[str]:
-    """
-    Create subtask
-    Return a list of lines of tractor script
-    """
-    # Gather task infos
-    name = f"[Tractor test] (Subtask) render job ({index})"
-    metadata = {'prod': "mvg", 'comment': "", "iteration": str(index)}
-    cmd = "subtask_cmd" 
-    cmd = rezWrapCommand(cmd)
-    service = "mikrosRender"
-    cmd_tags = ["blender"]
+
+def main(nb_subtasks):
+    print("[MAIN]")
+    logger.info("Starting subtask creation...")
+    
+    name = "[Tractor test](Subtask)Render"
     user = os.environ.get('FARM_USER', os.environ.get('USER', getpass.getuser()))
-    metadata['user'] = user
-    # Cast to string
-    metadata_str = json.dumps(metadata)
-    cmd_argv = " ".join(shlex.split(cmd))
-    envkey_str = " ".join(get_envkey())
-    tags_str = "".join(cmd_tags)
-    # Create subtask
-    subtask = f"""
-Task -title {{{name}}} -service {{{service}}} -metadata {{{metadata_str}}} -cmds {{
-    RemoteCmd {{{cmd_argv}}} -service {{{service}}} -tags {{{tags_str}}} -envkey {{{envkey_str}}}
-}}
-"""
-    log(f"-> subtask script :\n{subtask}")
-    return [l for l in subtask.split("\n") if l]
-
-
-def createSubTasks(nbTasks=3):
-    global stdout_lines
-    log("Create subtasks !")
-    import time
-    time.sleep(2)    
-    for subtask_index in range(nbTasks):
-        log(f"[createSubTasks] Create subtask n.{subtask_index}")
-        # TODO: Create task and update stdout
-        for line in createTask(subtask_index):
-            stdout_lines.append(line)
-        log("")
+    limits = ["blender"]
+    service = "mikrosRender"
+    
+    # Create subtasks
+    for index in range(nb_subtasks):
+        metadata = {
+            'prod': "mvg",
+            'comment': "",
+            'iteration': str(index),
+            'user': user
+        }
+        cmd = f"testRenderSubtask --frame {index}"
+        cmd = rezWrapCommand(cmd)
+        
+        queueSubtask(
+            title=f"{name}_{index:04d}",
+            cmd=cmd,
+            service=service,
+            limits=limits,
+            metadata=metadata,
+            envkey=get_envkey()
+        )
+    
+    logger.info(f"Successfully queued {nb_subtasks} subtasks")
+    print(f"Done! Created subtasks for frames 0-{nb_subtasks-1}")
 
 
 if __name__ == "__main__":
-    log("argv:", sys.argv)
-    createSubTasks()
-    print("\n".join(stdout_lines))
+    import sys
+    nb_subtasks = int(sys.argv[1])
+    main(nb_subtasks)

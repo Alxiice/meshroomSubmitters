@@ -3,116 +3,111 @@
 """
 Helper functions to create subtasks
 
-The queueSubtask will write on the stdout
+Provides queueSubtask() to write Tractor subtask definitions to stdout.
+Works with tractorSubtaskWrapper.py to ensure proper stream handling.
+
+Example :
 >>> from tractorSubmitter.api.subtaskCreator import queueSubtask
 >>> queueSubtask(command1, **args)
 >>> queueSubtask(command2, **args)
+>>> ...
 """
 
 import sys
-import json
 import os
-import re
 import shlex
-import getpass
 
-REZ_DELIMITER_PATTERN = re.compile(r"-|==|>=|>|<=|<")
 
-stdout_lines = []
+# Original stdout file descriptor
+# Cached to avoid reopening file descriptor multiple times
+_stdout = None
 
-def log(text):
+
+def log(*text):
+    text = " ".join(text)
     sys.stderr.write(text + "\n")
 
-def rezWrapCommand(cmd):
-    rezPackages = set()
-    if 'REZ_REQUEST' in os.environ:
-        packages = os.environ.get('REZ_USED_REQUEST', '').split()
-        resolvedPackages = os.environ.get('REZ_RESOLVE', '').split()
-        resolvedVersions = {}
-        for r in resolvedPackages:
-            if r.startswith('~'):  # remove implicit packages
-                continue
-            v = r.split('-')
-            if len(v) == 2:
-                resolvedVersions[v[0]] = v[1]
-            elif len(v) > 2:  # Handle case with multiple hyphen-minus
-                resolvedVersions[v[0]] = "-".join(v[1:])
-        usedPackages = set()  # Use set to remove duplicates
-        for p in packages:
-            if p.startswith('~') or p.startswith("!"):
-                continue
-            v = REZ_DELIMITER_PATTERN.split(p)
-            usedPackages.add(v[0])
-        for p in usedPackages:
-            # Use "==" to make sure we have the same version in the job that the one we have in the env
-            # where meshroom is launched
-            rezPackages.add("==".join([p, resolvedVersions[p]]))
-    packagesStr = " ".join([p for p in rezPackages if p])
-    if packagesStr:
-        rezBin = "rez"
-        if "REZ_BIN" in os.environ:
-            rezBin = os.environ["REZ_BIN"]
-        elif "REZ_PACKAGES_ROOT" in os.environ:
-            rezBin = os.path.join(os.environ["REZ_PACKAGES_ROOT"], "/bin/rez")
-        return f"{rezBin} env {packagesStr} -- {cmd}"
-    return cmd
 
-
-def get_envkey():
-    environment = {}
-    if 'REZ_DEV_PACKAGES_ROOT' in os.environ:
-        environment['REZ_DEV_PACKAGES_ROOT'] = os.environ['REZ_DEV_PACKAGES_ROOT']
-    if 'REZ_PROD_PACKAGES_PATH' in os.environ:
-        environment['REZ_PROD_PACKAGES_PATH'] = os.environ['REZ_PROD_PACKAGES_PATH']
-    if 'PROD' in os.environ:
-        environment['PROD'] = os.environ['PROD']
-    if 'PROD_ROOT' in os.environ:
-        environment['PROD_ROOT'] = os.environ['PROD_ROOT']
-    environment["FARM_USER"] = os.environ.get('FARM_USER', os.environ.get('USER', getpass.getuser()))
-    return [f"setenv {k}={v}" for k, v in environment.items()]
-
-
-def createTask(index) -> list[str]:
+def _getCachedSubtaskStdout():
     """
-    Create subtask
-    Return a list of lines of tractor script
+    Get cached subtask stdout
     """
-    # Gather task infos
-    name = f"[Tractor test] (Subtask) render job ({index})"
-    metadata = {'prod': "mvg", 'comment': "", "iteration": str(index)}
-    cmd = "subtask_cmd" 
-    cmd = rezWrapCommand(cmd)
-    service = "mikrosRender"
-    cmd_tags = ["blender"]
-    user = os.environ.get('FARM_USER', os.environ.get('USER', getpass.getuser()))
-    metadata['user'] = user
-    # Cast to string
-    metadata_str = json.dumps(metadata)
-    cmd_argv = " ".join(shlex.split(cmd))
-    envkey_str = " ".join(get_envkey())
-    tags_str = "".join(cmd_tags)
-    # Create subtask
-    subtask = f"""
-Task -title {{{name}}} -service {{{service}}} -metadata {{{metadata_str}}} -cmds {{
-    RemoteCmd {{{cmd_argv}}} -service {{{service}}} -tags {{{tags_str}}} -envkey {{{envkey_str}}}
+    global _stdout
+    if _stdout is None:
+        if 'TRACTOR_SUBTASK_STDOUT_FD' in os.environ:
+            try:
+                fd = int(os.environ['TRACTOR_SUBTASK_STDOUT_FD'])
+                # Open the file descriptor for writing
+                _stdout = os.fdopen(fd, 'w', buffering=1)
+            except (ValueError, OSError):
+                _stdout = sys.stdout
+            log(f"(_getCachedSubtaskStdout) stdout={_stdout}")
+        else:
+            raise FileNotFoundError("(_getCachedSubtaskStdout) Could not find TRACTOR_SUBTASK_STDOUT_FD")
+    return _stdout
+
+
+def queueSubtask(title, cmd, service="", limits=None, metadata=None, envkey=None):
+    """
+    Queue a subtask to be created in Tractor.
+
+    Args:
+        title (str): Task title
+        cmd (str or list): Command to run (string or argv list)
+        service (str): Tractor service key
+        limits (list): Limit tags (e.g. ["blender", "nuke"])
+        metadata (dict): Metadata as key:value pairs
+        envkey (list): Environment key list
+
+    # TODO : Add possibility to specify blades ?
+
+    Example:
+        queueSubtask(
+            title="render_frame_0001",
+            cmd="render --frame 1 scene.ma",
+            service="mikrosRender",
+            limits=["blender"],
+            metadata={'user': 'john', 'iteration': '1', 'prod': 'mvg'}
+        )
+    """
+    # Get the correct stdout for Tractor
+    tractor_stdout = _getCachedSubtaskStdout()
+
+    # Parse command
+    if isinstance(cmd, str):
+        cmd_argv = shlex.split(cmd)
+    else:
+        cmd_argv = list(cmd)
+
+    cmd_str = " ".join(cmd_argv)
+
+    # Build tags string
+    tags_str = ""
+    if limits:
+        tags_str = f"-tags {{{' '.join(limits)}}}"
+
+    # Build metadata string
+    metadata_str = ""
+    if metadata:
+        metadata_list = [f"{k}:{v}" for k, v in metadata.items()]
+        metadata_str = f"-metadata {{{' '.join(metadata_list)}}}"
+
+    # Build envkey string
+    envkey_str = ""
+    if envkey:
+        envkey_str = f"-envkey {{{' '.join(envkey)}}}"
+
+    # Build service string
+    service_str = f"-service {{{service}}}" if service else ""
+
+    # Write Alfred task definition
+    task_def = f"""
+Task -title {{{title}}} {service_str} {metadata_str} -cmds {{
+    RemoteCmd {{{cmd_str}}} {service_str} {tags_str} {envkey_str}
 }}
 """
-    log(f"-> subtask script :\n{subtask}")
-    return [l for l in subtask.split("\n") if l]
 
+    tractor_stdout.write(task_def)
+    tractor_stdout.flush()
 
-def createSubTasks(nbTasks=3):
-    global stdout_lines
-    log("Create subtasks !")
-    import time
-    time.sleep(2)    
-    for subtask_index in range(nbTasks):
-        log(f"[createSubTasks] Create subtask n.{subtask_index}")
-        # TODO: Create task and update stdout
-        for line in createTask(subtask_index):
-            stdout_lines.append(line)
-        log("")
-
-createSubTasks()
-
-print("\n".join(stdout_lines))
+    log(f"Queued subtask: {title}")
