@@ -4,6 +4,7 @@
 In this script we will execute a small process
 """
 
+import os
 import time
 import argparse
 
@@ -11,6 +12,13 @@ import argparse
 def main(frame):
     print("Sleeping for 2 seconds")
     time.sleep(2)
+
+
+def printenv():
+    print("")
+    print("Env:"\n)
+    import pprint
+    pprint.pprint(dict(os.environ))
 
 
 if __name__ == "__main__":
@@ -21,3 +29,4 @@ if __name__ == "__main__":
     print(f"RENDER frame {frame}")
     main(frame)
     print("Done !")
+    # printenv()
